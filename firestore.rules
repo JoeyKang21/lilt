@@ -1,0 +1,74 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 辅助函数：验证请求用户是否已认证
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // 辅助函数：验证请求用户是否为文档所有者
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // 辅助函数：字段校验 - 日程数据结构完整性
+    function isValidScheduleData() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['userId', 'title', 'startTime', 'endTime', 'category', 'color', 'status', 'createdAt'])
+          && data.title is string
+          && data.title.size() > 0
+          && data.title.size() <= 200
+          && data.startTime is timestamp
+          && data.endTime is timestamp
+          && data.startTime <= data.endTime
+          && data.category is string
+          && data.category.size() > 0
+          && data.color is string
+          && data.color.size() > 0
+          && data.status in ['pending', 'in_progress', 'completed']
+          && data.userId is string;
+    }
+
+    // 用户文档：仅认证用户可创建和读取自己的文档
+    match /users/{userId} {
+      // 允许创建用户文档（注册时）
+      allow create: if isAuthenticated() && isOwner(userId);
+      // 允许读取自己的用户文档
+      allow read: if isAuthenticated() && isOwner(userId);
+      // 禁止删除用户文档（通过App管理不支持直接删除）
+      allow delete: if false;
+      // 允许更新自己的用户文档
+      allow update: if isAuthenticated() && isOwner(userId);
+
+      // 用户下的日程子集合
+      match /schedules/{scheduleId} {
+        // 创建日程：已认证 + 数据完整 + 属于当前用户
+        allow create: if isAuthenticated()
+            && isOwner(userId)
+            && isValidScheduleData()
+            && request.resource.data.userId == userId;
+
+        // 读取日程：已认证 + 属于当前用户
+        allow read: if isAuthenticated() && isOwner(userId);
+
+        // 更新日程：已认证 + 数据完整 + 属于当前用户
+        allow update: if isAuthenticated()
+            && isOwner(userId)
+            && isOwner(resource.data.userId)
+            && request.resource.data.userId == resource.data.userId;
+
+        // 删除日程：已认证 + 属于当前用户
+        allow delete: if isAuthenticated()
+            && isOwner(userId)
+            && isOwner(resource.data.userId);
+      }
+    }
+
+    // 拒绝所有其他未匹配的访问
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
